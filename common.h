@@ -57,6 +57,7 @@ struct LLnode_t
 typedef struct LLnode_t LLnode;
 
 
+#define WS 8
 //Receiver and sender data structures
 struct Receiver_t
 {
@@ -84,6 +85,8 @@ struct Sender_t
     pthread_cond_t buffer_cv;    
     LLnode * input_cmdlist_head;
     LLnode * input_framelist_head;
+    struct Frame_t* sent_frames[WS]; 
+    struct timeval* frame_timeouts[WS];
 
     unsigned char LFS, LAR;
     int send_id;
@@ -97,7 +100,6 @@ enum SendFrame_DstType
 
 typedef struct Sender_t Sender;
 typedef struct Receiver_t Receiver;
-
 
 #define MAX_FRAME_SIZE 64
 

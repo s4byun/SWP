@@ -96,6 +96,7 @@ void ll_destroy_node(LLnode * node)
         free((char *) node->value);
     }
     free(node);
+    node = NULL;
 }
 
 //Compute the difference in usec for two timeval objects

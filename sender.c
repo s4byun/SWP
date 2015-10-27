@@ -1,6 +1,5 @@
 #include "sender.h"
 
-#define SWS 10
 void init_sender(Sender * sender, int id)
 {
     //TODO: You should fill in this function as necessary
@@ -15,7 +14,11 @@ struct timeval * sender_get_next_expiring_timeval(Sender * sender)
 {
     //TODO: You should fill in this function so that it returns the next timeout that should occur
 
-    struct timeval* tv = malloc(sizeof(struct timeval)); 
+    struct timeval* tv = sender->frame_timeouts[sender->LFS];
+    
+    if(tv == NULL)
+        tv = malloc(sizeof(struct timeval)); 
+
     gettimeofday(tv, NULL);
 
     tv->tv_usec += 100000;
@@ -38,7 +41,7 @@ void handle_incoming_acks(Sender * sender,
     //    3) Check whether the frame is corrupted
     //    4) Check whether the frame is for this sender
     //    5) Do sliding window protocol for sender/receiver pair   
-/*
+
     int incoming_msgs_length = ll_get_length(sender->input_framelist_head);
     while(incoming_msgs_length > 0)
     {
@@ -47,30 +50,33 @@ void handle_incoming_acks(Sender * sender,
 
         char * raw_char_buf = (char *) ll_inmsg_node->value;
         Frame * inframe = convert_char_to_frame(raw_char_buf);
-        free(ll_inmsg_node);
+        ll_destroy_node(ll_inmsg_node);
 
         if(crc8(raw_char_buf, MAX_FRAME_SIZE))
         {
             if(atoi(inframe->sender_addr) == sender->send_id)
             {
                 sender->LAR = inframe->seqnum;
-                while(1)
-                {
-                    LLnode * cur_node = *outgoing_frames_head_ptr;
-                    char* outframe_char_buf = (char *) cur_node->value;
-                    Frame* outframe = convert_char_to_frame(outframe_char_buf);
-                    if(outframe->seqnum == inframe->seqnum)
-                    {
-                        ll_pop_node(&cur_node);
-                        ll_destroy_node(cur_node);
-                        break;
-                    }
-                    else
-                        cur_node = cur_node->next;
-                }
+                int ack_frame_num = (int) inframe->seqnum;
+                free(sender->sent_frames[ack_frame_num % WS]);
+                sender->sent_frames[ack_frame_num % WS] = NULL;
             }
         }
-    }*/
+        free(inframe);
+    }
+
+    int i;
+    for(i=0; i < WS; i++)
+    {
+        if(sender->sent_frames[i] != NULL)
+        {
+            fprintf(stderr, "ACK<%d> lost\n", (int) sender->sent_frames[i]->seqnum);
+            char* outframe_char_buf = convert_frame_to_char(sender->sent_frames[i]); 
+            free(sender->sent_frames[i]);
+            sender->sent_frames[i] = NULL;
+            ll_append_node(outgoing_frames_head_ptr, outframe_char_buf);
+        }
+    }
 }
 
 
@@ -141,12 +147,13 @@ void handle_input_cmds(Sender * sender,
             free(outgoing_cmd->message);
             free(outgoing_cmd);
 
-            sender->LFS = seqnum++;
+            sender->LFS = seqnum;
 
             //Convert the message to the outgoing_charbuf
             char * outgoing_charbuf = convert_frame_to_char(outgoing_frame);
             ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
-            free(outgoing_frame);
+            sender->sent_frames[seqnum % 8] = outgoing_frame;
+            sender->frame_timeouts[seqnum++ % 8] = sender_get_next_expiring_timeval(sender);
         }
     }   
 }
@@ -160,6 +167,7 @@ void handle_timedout_frames(Sender * sender,
     //    3) Update the next timeout field on the outgoing frames
 
 
+    
 }
 
 
