@@ -20,6 +20,7 @@ int ll_get_length(LLnode *);
 void ll_append_node(LLnode **, void *);
 LLnode * ll_pop_node(LLnode **);
 void ll_destroy_node(LLnode *);
+void ll_destroy_sendQ(LLnode *);
 
 //Print functions
 void print_cmd(Cmd *);
@@ -34,5 +35,6 @@ char * convert_frame_to_char(Frame *);
 Frame * convert_char_to_frame(char *);
 
 char crc8(char*, int);
-unsigned char int_to_bin(int);
+//unsigned char int_to_bin(int);
+void calculate_timeout(struct timeval *);
 #endif

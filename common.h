@@ -51,12 +51,11 @@ struct LLnode_t
     struct LLnode_t * next;
     enum LLtype type;
 
-    struct timeval* tv;
     void * value;
 };
 typedef struct LLnode_t LLnode;
 
-
+#define MAX_SEQ_NUM 255
 #define WS 8
 //Receiver and sender data structures
 struct Receiver_t
@@ -70,7 +69,8 @@ struct Receiver_t
     pthread_cond_t buffer_cv;
     LLnode * input_framelist_head;
 
-    int recv_id;
+    struct Frame_t * recv_q[WS];
+    int recv_id, NFE;
 };
 
 struct Sender_t
@@ -85,12 +85,17 @@ struct Sender_t
     pthread_cond_t buffer_cv;    
     LLnode * input_cmdlist_head;
     LLnode * input_framelist_head;
-    struct Frame_t* sent_frames[WS]; 
-    struct timeval* frame_timeouts[WS];
 
-    unsigned char LFS, LAR;
-    int send_id;
+    LLnode * send_q_head;
+    int send_id, seqnum, LFS, LAR;
 };
+
+struct sendQ_slot
+{
+    struct Frame_t* frame;
+    struct timeval* frame_timeout;
+};
+typedef struct sendQ_slot send_Q;
 
 enum SendFrame_DstType 
 {

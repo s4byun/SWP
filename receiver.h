@@ -17,5 +17,9 @@
 #include "communicate.h"
 
 void init_receiver(Receiver *, int);
+void insert_frame(Receiver *, Frame *);
+Frame* find_frame_in_buffer(Receiver *, int);
+int is_frame_in_buffer(Receiver *, int);
+int recv_q_size(Receiver *);
 void * run_receiver(void *);
 #endif

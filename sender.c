@@ -6,28 +6,32 @@ void init_sender(Sender * sender, int id)
     sender->send_id = id;
     sender->input_cmdlist_head = NULL;
     sender->input_framelist_head = NULL;
+    sender->send_q_head = NULL; 
     pthread_cond_init(&sender->buffer_cv, NULL);
     pthread_mutex_init(&sender->buffer_mutex, NULL);
+    sender->seqnum = 0;
+    sender->LFS = -1;
+    sender->LAR = -1;
 }
 
 struct timeval * sender_get_next_expiring_timeval(Sender * sender)
 {
     //TODO: You should fill in this function so that it returns the next timeout that should occur
 
-    struct timeval* tv = sender->frame_timeouts[sender->LFS];
-    
-    if(tv == NULL)
-        tv = malloc(sizeof(struct timeval)); 
-
-    gettimeofday(tv, NULL);
-
-    tv->tv_usec += 100000;
-    if(tv->tv_usec >= 1000000)
+    struct timeval* tv = NULL;
+    LLnode * curr_node = sender->send_q_head;
+    int i;
+    for(i=0; i < send_q_size(sender); i++)
     {
-        tv->tv_usec -= 1000000;
-        tv->tv_sec += 1;
-    }
+        send_Q * curr = (send_Q *) curr_node->value;
+        curr_node = curr_node->next;
+        if(curr->frame_timeout == NULL)
+            continue;
 
+        if(tv == NULL || timeval_usecdiff(tv, curr->frame_timeout) < 0)
+            tv = curr->frame_timeout;
+    }
+    
     return tv;
 }
 
@@ -56,26 +60,23 @@ void handle_incoming_acks(Sender * sender,
         {
             if(atoi(inframe->sender_addr) == sender->send_id)
             {
-                sender->LAR = inframe->seqnum;
-                int ack_frame_num = (int) inframe->seqnum;
-                free(sender->sent_frames[ack_frame_num % WS]);
-                sender->sent_frames[ack_frame_num % WS] = NULL;
+                if(is_next_ack(sender, (int) inframe->seqnum))
+                {
+                    //fprintf(stderr, "ACK %d received\n", (int) inframe->seqnum % WS);
+                    sender->LAR = (int) inframe->seqnum;
+
+                    LLnode * acked_node = ll_pop_node(&sender->send_q_head);
+                    ll_destroy_sendQ(acked_node);
+                }
             }
         }
+        
         free(inframe);
     }
-
     int i;
-    for(i=0; i < WS; i++)
+    for(i=0; i < send_q_size(sender); i++)
     {
-        if(sender->sent_frames[i] != NULL)
-        {
-            fprintf(stderr, "ACK<%d> lost\n", (int) sender->sent_frames[i]->seqnum);
-            char* outframe_char_buf = convert_frame_to_char(sender->sent_frames[i]); 
-            free(sender->sent_frames[i]);
-            sender->sent_frames[i] = NULL;
-            ll_append_node(outgoing_frames_head_ptr, outframe_char_buf);
-        }
+        //fprintf(stderr, "ACK %d LOST!!!\n", i);
     }
 }
 
@@ -91,17 +92,10 @@ void handle_input_cmds(Sender * sender,
 
     int input_cmd_length = ll_get_length(sender->input_cmdlist_head);
 
-    int seqnum = 0;
-        
     //Recheck the command queue length to see if stdin_thread dumped a command on us
     input_cmd_length = ll_get_length(sender->input_cmdlist_head);
-    while (input_cmd_length > 0)
+    while (input_cmd_length > 0 && send_q_size(sender) < WS)
     {
-        if(seqnum == 256)
-        {
-            seqnum = 0;
-        }
-
         //Pop a node off and update the input_cmd_length
         LLnode * ll_input_cmd_node = ll_pop_node(&sender->input_cmdlist_head);
         input_cmd_length = ll_get_length(sender->input_cmdlist_head);
@@ -117,10 +111,13 @@ void handle_input_cmds(Sender * sender,
         //                    Does the receiver have enough space in in it's input queue to handle this message?
         //                    Were the previous messages sent to this receiver ACTUALLY delivered to the receiver?
         int msg_length = strlen(outgoing_cmd->message);
-        if (msg_length > MAX_FRAME_SIZE)
+        if (msg_length > FRAME_PAYLOAD_SIZE - 1)
         {
-            //Do something about messages that exceed the frame size
-            printf("<SEND_%d>: sending messages of length greater than %d is not implemented\n", sender->send_id, MAX_FRAME_SIZE);
+            ll_append_node(&sender->input_cmdlist_head, outgoing_cmd);
+            ll_split_head(&sender->input_cmdlist_head, FRAME_PAYLOAD_SIZE - 1); 
+            input_cmd_length = ll_get_length(sender->input_cmdlist_head);
+            //fprintf(stderr, "Sending messages of length greater than %d\n", FRAME_PAYLOAD_SIZE);
+            continue;
         }
         else
         {
@@ -136,7 +133,12 @@ void handle_input_cmds(Sender * sender,
             strncpy(outgoing_frame->receiver_addr, dst, MAC_ADDR_SIZE);
             strncpy(outgoing_frame->sender_addr, src, MAC_ADDR_SIZE);
             strncpy(outgoing_frame->data, outgoing_cmd->message, FRAME_PAYLOAD_SIZE);
-            outgoing_frame->seqnum = seqnum;
+
+            /*
+            while (sender->send_q[sender->seqnum%8].sent_frame != NULL)
+                sender->seqnum = (sender->seqnum == 255) ? 0 : sender->seqnum + 1;
+            */
+            outgoing_frame->seqnum = sender->seqnum;
 
             char* raw_char_buf = convert_frame_to_char(outgoing_frame); 
             outgoing_frame->crc = crc8(raw_char_buf, MAX_FRAME_SIZE);
@@ -147,15 +149,20 @@ void handle_input_cmds(Sender * sender,
             free(outgoing_cmd->message);
             free(outgoing_cmd);
 
-            sender->LFS = seqnum;
+            sender->LFS = sender->seqnum;
 
             //Convert the message to the outgoing_charbuf
             char * outgoing_charbuf = convert_frame_to_char(outgoing_frame);
             ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
-            sender->sent_frames[seqnum % 8] = outgoing_frame;
-            sender->frame_timeouts[seqnum++ % 8] = sender_get_next_expiring_timeval(sender);
+            send_Q * sent_buf = malloc(sizeof(send_Q));
+            sent_buf->frame = malloc(sizeof(Frame));
+            sent_buf->frame = outgoing_frame;
+            sent_buf->frame_timeout = NULL;
+            
+            ll_append_node(&sender->send_q_head, sent_buf);
+            sender->seqnum = (sender->seqnum == 255) ? 0 : sender->seqnum + 1;
         }
-    }   
+    }
 }
 
 void handle_timedout_frames(Sender * sender,
@@ -166,10 +173,82 @@ void handle_timedout_frames(Sender * sender,
     //    2) Locate frames that are timed out and add them to the outgoing frames
     //    3) Update the next timeout field on the outgoing frames
 
-
-    
+    int i;
+    LLnode * curr_node = sender->send_q_head;
+    for(i=0; i < send_q_size(sender); i++)
+    {
+        send_Q * curr = (send_Q *) curr_node->value;
+        Frame * sent_frame = curr->frame;
+        struct timeval * tv = curr->frame_timeout;
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        if(tv != NULL)
+        {
+            if(timeval_usecdiff(tv, &now) > 0)
+            {
+                char * outframe_char_buf = convert_frame_to_char(sent_frame);
+                ll_append_node(outgoing_frames_head_ptr, outframe_char_buf);
+                calculate_timeout(curr->frame_timeout);
+            }
+        }
+        if(tv == NULL)
+        {
+            curr->frame_timeout = (struct timeval *) malloc(sizeof(struct timeval));
+            calculate_timeout(curr->frame_timeout);
+        }
+    }
 }
 
+void ll_split_head(LLnode  ** head_ptr, int payload_size)
+{
+    if(head_ptr == NULL || *head_ptr == NULL)
+        return;
+
+    //Get the message from the head of the linked list
+    LLnode * head = *head_ptr;
+    Cmd* head_cmd = (Cmd*) head->value;
+    char* msg = head_cmd->message;
+
+    //Do not need to split
+    if(strlen(msg) < payload_size)
+        return;
+
+    int i;
+    for(i = payload_size; i < strlen(msg); i+= payload_size)
+    {
+        Cmd* next_cmd = (Cmd*) malloc(sizeof(Cmd));
+        next_cmd->message = (char *) malloc((payload_size+1)*sizeof(char));
+        memset(next_cmd->message, 0, (payload_size+1)*sizeof(char));
+        strncpy(next_cmd->message, msg + i, payload_size*sizeof(char));
+        next_cmd->src_id = head_cmd->src_id;
+        next_cmd->dst_id = head_cmd->dst_id;
+        ll_append_node(head_ptr, next_cmd);
+    }
+    head_cmd->message[payload_size] = '\0';
+}
+
+int send_q_size(Sender * sender)
+{
+    if(sender->LFS == sender->LAR)
+        return 0;
+    else if(sender->LFS > sender->LAR)
+    {
+        return sender->LFS - sender->LAR; 
+    }
+    else
+    {
+        return sender->LFS + MAX_SEQ_NUM - sender->LAR; 
+    }
+}
+
+int is_next_ack(Sender* sender, int ack)
+{
+    int next_ack = (sender->LAR == 255) ? 0 : sender->LAR + 1;
+    if(ack == next_ack)
+        return 1;
+    else
+        return 0;
+}
 
 void * run_sender(void * input_sender)
 {    
@@ -291,3 +370,5 @@ void * run_sender(void * input_sender)
     pthread_exit(NULL);
     return 0;
 }
+
+

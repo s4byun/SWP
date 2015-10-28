@@ -99,6 +99,19 @@ void ll_destroy_node(LLnode * node)
     node = NULL;
 }
 
+void ll_destroy_sendQ(LLnode * node)
+{
+    send_Q * curr = (send_Q *) node->value;
+    free(curr->frame);
+    free(curr->frame_timeout);
+    curr->frame = NULL;
+    curr->frame_timeout = NULL;
+    free(curr);
+    curr = NULL;
+    free(node);
+    node = NULL;
+}
+
 //Compute the difference in usec for two timeval objects
 long timeval_usecdiff(struct timeval *start_time, 
                       struct timeval *finish_time)
@@ -181,19 +194,13 @@ char crc8(char* array, int length)
     return crc;
 }
 
-// Binary increment used for seqnum
-unsigned char int_to_bin (int num)
+void calculate_timeout(struct timeval * timeout)
 {
-    unsigned char result = 0;
-    while(num > 0)
+    gettimeofday(timeout, NULL);
+    timeout->tv_usec += 100000;
+    if(timeout->tv_usec > 1000000)
     {
-        result |= num%2;
-        result = result << 1;
-        num /= 2;
+        timeout->tv_sec += 1;
+        timeout->tv_usec -= 1000000;
     }
-    return result;
 }
-
-
-
-

@@ -7,6 +7,12 @@ void init_receiver(Receiver * receiver,
     receiver->input_framelist_head = NULL;
     pthread_cond_init(&receiver->buffer_cv, NULL);
     pthread_mutex_init(&receiver->buffer_mutex, NULL);
+    receiver->NFE = 0;
+    int i;
+    for(i=0; i<WS; i++)
+    {
+        receiver->recv_q[i] = NULL;
+    }
 }
 
 
@@ -21,7 +27,7 @@ void handle_incoming_msgs(Receiver * receiver,
     //    5) Do sliding window protocol for sender/receiver pair
 
     int incoming_msgs_length = ll_get_length(receiver->input_framelist_head);
-    while (incoming_msgs_length > 0)
+    while (incoming_msgs_length > 0 && recv_q_size(receiver) < 8)
     {
         //Pop a node off the front of the link list and update the count
         LLnode * ll_inmsg_node = ll_pop_node(&receiver->input_framelist_head);
@@ -37,7 +43,23 @@ void handle_incoming_msgs(Receiver * receiver,
             char crc = crc8(raw_char_buf, MAX_FRAME_SIZE);
             if(crc == inframe->crc)
             {
-                printf("<RECV_%d>:[%s]\n", receiver->recv_id, inframe->data);
+                int frame_num = (int) inframe->seqnum;
+                if(frame_num == receiver->NFE)
+                {
+                    receiver->NFE = (receiver->NFE == 255) ? 0 : receiver->NFE + 1;
+                    printf("<RECV_%d>:[%s]\n", receiver->recv_id, inframe->data);
+                    Frame * next_frame;
+                    while((next_frame = find_frame_in_buffer(receiver, receiver->NFE)) != NULL)
+                    {
+                        printf("<RECV_%d>:[%s]\n", receiver->recv_id, next_frame->data);
+                        free(next_frame);
+                        receiver->NFE = (receiver->NFE == 255) ? 0 : receiver->NFE + 1;
+                    }
+                } 
+                else if(is_frame_in_buffer(receiver, frame_num))
+                {
+                    insert_frame(receiver, inframe);
+                }
 
                 // Send ACK
                 char * ack = convert_frame_to_char(inframe);
@@ -50,6 +72,65 @@ void handle_incoming_msgs(Receiver * receiver,
         free(inframe);
         free(ll_inmsg_node);
     }
+}
+
+void insert_frame(Receiver * receiver, Frame * frame)
+{
+    int i;
+    for(i=0; i<WS; i++)
+    {
+        if(receiver->recv_q[i] == NULL)
+        {
+            receiver->recv_q[i] = frame;
+            return;
+        }
+    }
+}
+
+Frame* find_frame_in_buffer(Receiver * receiver, int check_num)
+{
+    int i;
+    for(i=0; i<WS; i++)
+    {
+        Frame * curr_frame = receiver->recv_q[i];
+        if(curr_frame != NULL)
+        {
+            if((int) curr_frame->seqnum == check_num)
+            {
+                receiver->recv_q[i] = NULL;
+                return curr_frame;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+int is_frame_in_buffer(Receiver * receiver, int check_num)
+{
+    int i;
+    for(i=0; i<WS; i++)
+    {
+        Frame * curr_frame = receiver->recv_q[i];
+        if(curr_frame != NULL)
+        {
+            if((int) curr_frame->seqnum == check_num)
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
+int recv_q_size(Receiver * receiver)
+{
+    int i, count = 0;
+    for(i=0; i<WS; i++)
+    {
+        if(receiver->recv_q[i] != NULL)
+            count++;
+    }
+    return count;
 }
 
 void * run_receiver(void * input_receiver)
