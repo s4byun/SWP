@@ -34,44 +34,69 @@ void handle_incoming_msgs(Receiver * receiver,
         incoming_msgs_length = ll_get_length(receiver->input_framelist_head);
 
 
-        //NOTE: You should not blindly print messages!
-        //                    Is this an old, retransmitted message?           
         char * raw_char_buf = (char *) ll_inmsg_node->value;
         Frame * inframe = convert_char_to_frame(raw_char_buf);
-        if(atoi(inframe->receiver_addr) == receiver->recv_id) 
-        {
-            char crc = crc8(raw_char_buf, MAX_FRAME_SIZE);
-            if(crc == inframe->crc)
-            {
-                int frame_num = (int) inframe->seqnum;
-                if(frame_num == receiver->NFE)
-                {
-                    receiver->NFE = (receiver->NFE == 255) ? 0 : receiver->NFE + 1;
-                    printf("<RECV_%d>:[%s]\n", receiver->recv_id, inframe->data);
-                    Frame * next_frame;
-                    while((next_frame = find_frame_in_buffer(receiver, receiver->NFE)) != NULL)
-                    {
-                        printf("<RECV_%d>:[%s]\n", receiver->recv_id, next_frame->data);
-                        free(next_frame);
-                        receiver->NFE = (receiver->NFE == 255) ? 0 : receiver->NFE + 1;
-                    }
-                } 
-                else if(is_frame_in_buffer(receiver, frame_num))
-                {
-                    insert_frame(receiver, inframe);
-                }
 
-                // Send ACK
-                char * ack = convert_frame_to_char(inframe);
-                ll_append_node(outgoing_frames_head_ptr, ack);
-            }
+        char crc = crc8(raw_char_buf, MAX_FRAME_SIZE);
+
+        //Checks if message is corrupted
+        if(crc == inframe->crc)
+        {
+            //Checks if message is for this receiver
+            if(atoi(inframe->receiver_addr) == receiver->recv_id) 
+            {
+                //fprintf(stderr, "MESSAGE %s RECEIVED\n", inframe->data);
+                int frame_num = (int) inframe->seqnum;
+
+                //Checks if message is already received
+                if(is_valid(receiver, frame_num))
+                {
+                    //Checks if message is in order
+                    if(receiver->NFE == frame_num)
+                    {
+                        receiver->NFE = (receiver->NFE == 255) ? 0 : receiver->NFE + 1;
+                        printf("<RECV_%d>:[%s]\n", receiver->recv_id, inframe->data);
+                        Frame * next_frame;
+                        while((next_frame = find_frame_in_buffer(receiver, receiver->NFE)) != NULL)
+                        {
+                            printf("<RECV_%d>:[%s]\n", receiver->recv_id, next_frame->data);
+                            free(next_frame);
+                            receiver->NFE = (receiver->NFE == 255) ? 0 : receiver->NFE + 1;
+                        }
+                    }
+                    //Checks if out of order message is already in buffer
+                    else if(is_frame_in_buffer(receiver, frame_num) == 0)
+                    {
+                        //fprintf(stderr, "MESSAGE %s STORED\n", inframe->data);
+                        insert_frame(receiver, inframe);
+                    }
+                }
+            } 
+
+            // Send ACK
+            char * ack = convert_frame_to_char(inframe);
+            ll_append_node(outgoing_frames_head_ptr, ack);
         }
+
         //Free raw_char_buf
         free(raw_char_buf);
-
-        free(inframe);
         free(ll_inmsg_node);
     }
+}
+
+int is_valid(Receiver * receiver, int frame_num)
+{
+    if(receiver->NFE + WS - 1 > MAX_SEQ_NUM)
+    {
+        if(frame_num >= receiver->NFE || frame_num <= receiver->NFE + MAX_SEQ_NUM - 2)
+        {
+            return 1;
+        }
+    }
+    else if(frame_num >= receiver->NFE && frame_num <= receiver->NFE + WS - 1)
+        return 1;
+
+    return 0;
 }
 
 void insert_frame(Receiver * receiver, Frame * frame)

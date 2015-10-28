@@ -21,5 +21,6 @@ void insert_frame(Receiver *, Frame *);
 Frame* find_frame_in_buffer(Receiver *, int);
 int is_frame_in_buffer(Receiver *, int);
 int recv_q_size(Receiver *);
+int is_valid(Receiver *, int);
 void * run_receiver(void *);
 #endif
