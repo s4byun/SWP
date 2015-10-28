@@ -85,6 +85,9 @@ void handle_input_cmds(Sender * sender,
 {
     int input_cmd_length = ll_get_length(sender->input_cmdlist_head);
 
+    //Split the message if it's too long
+    ll_split_head(&sender->input_cmdlist_head, FRAME_PAYLOAD_SIZE - 1);
+
     //Recheck the command queue length to see if stdin_thread dumped a command on us
     input_cmd_length = ll_get_length(sender->input_cmdlist_head);
     while (input_cmd_length > 0 && send_q_size(sender) < WS)
@@ -97,74 +100,58 @@ void handle_input_cmds(Sender * sender,
         Cmd * outgoing_cmd = (Cmd *) ll_input_cmd_node->value;
         free(ll_input_cmd_node);
 
-        int msg_length = strlen(outgoing_cmd->message);
-        if (msg_length > FRAME_PAYLOAD_SIZE - 1)
-        {
-            //Put the long message back in the cmd list
-            ll_append_node(&sender->input_cmdlist_head, outgoing_cmd);
+        //This is probably ONLY one step you want
+        Frame * outgoing_frame = (Frame *) malloc (sizeof(Frame));
 
-            //Split the message into many smaller messages
-            ll_split_head(&sender->input_cmdlist_head, FRAME_PAYLOAD_SIZE - 1); 
+        //Convert uint16_t to string
+        char* src = malloc(MAC_ADDR_SIZE);
+        char* dst = malloc(MAC_ADDR_SIZE);
+        sprintf(src, "%u", outgoing_cmd->src_id);
+        sprintf(dst, "%u", outgoing_cmd->dst_id);
 
-            //Update the list length
-            input_cmd_length = ll_get_length(sender->input_cmdlist_head);
-            continue;
-        }
-        else
-        {
-            //This is probably ONLY one step you want
-            Frame * outgoing_frame = (Frame *) malloc (sizeof(Frame));
+        //Populate the outgoing frame's fields
+        strncpy(outgoing_frame->receiver_addr, dst, MAC_ADDR_SIZE);
+        strncpy(outgoing_frame->sender_addr, src, MAC_ADDR_SIZE);
+        strncpy(outgoing_frame->data, outgoing_cmd->message, FRAME_PAYLOAD_SIZE);
 
-            //Convert uint16_t to string
-            char* src = malloc(MAC_ADDR_SIZE);
-            char* dst = malloc(MAC_ADDR_SIZE);
-            sprintf(src, "%u", outgoing_cmd->src_id);
-            sprintf(dst, "%u", outgoing_cmd->dst_id);
+        //Assign seqnum to the outgoing frame
+        outgoing_frame->seqnum = sender->seqnum;
 
-            //Populate the outgoing frame's fields
-            strncpy(outgoing_frame->receiver_addr, dst, MAC_ADDR_SIZE);
-            strncpy(outgoing_frame->sender_addr, src, MAC_ADDR_SIZE);
-            strncpy(outgoing_frame->data, outgoing_cmd->message, FRAME_PAYLOAD_SIZE);
+        char* raw_char_buf = convert_frame_to_char(outgoing_frame); 
 
-            //Assign seqnum to the outgoing frame
-            outgoing_frame->seqnum = sender->seqnum;
+        //Assign crc to the outgoing frame
+        outgoing_frame->crc = crc8(raw_char_buf, MAX_FRAME_SIZE);
 
-            char* raw_char_buf = convert_frame_to_char(outgoing_frame); 
+        free(raw_char_buf);
 
-            //Assign crc to the outgoing frame
-            outgoing_frame->crc = crc8(raw_char_buf, MAX_FRAME_SIZE);
+        //At this point, we don't need the outgoing_cmd
+        free(outgoing_cmd->message);
+        free(outgoing_cmd);
 
-            free(raw_char_buf);
+        //Update LFS
+        sender->LFS = sender->seqnum;
 
-            //At this point, we don't need the outgoing_cmd
-            free(outgoing_cmd->message);
-            free(outgoing_cmd);
+        //Convert the message to the outgoing_charbuf and send it
+        char * outgoing_charbuf = convert_frame_to_char(outgoing_frame);
+        //fprintf(stderr, "MESSAGE %s SENT\n", outgoing_frame->data);
+        ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
 
-            //Update LFS
-            sender->LFS = sender->seqnum;
+        //This frame needs to be stored in the send queue.
+        send_Q * sent_buf = malloc(sizeof(send_Q));
+        sent_buf->frame = malloc(sizeof(Frame));
+        sent_buf->frame = outgoing_frame;
 
-            //Convert the message to the outgoing_charbuf and send it
-            char * outgoing_charbuf = convert_frame_to_char(outgoing_frame);
-            //fprintf(stderr, "MESSAGE %s SENT\n", outgoing_frame->data);
-            ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
+        //Leave timeout field as NULL for handle_timedout_frames to handle it
+        sent_buf->frame_timeout = NULL;
 
-            //This frame needs to be stored in the send queue.
-            send_Q * sent_buf = malloc(sizeof(send_Q));
-            sent_buf->frame = malloc(sizeof(Frame));
-            sent_buf->frame = outgoing_frame;
-
-            //Leave timeout field as NULL for handle_timedout_frames to handle it
-            sent_buf->frame_timeout = NULL;
-            
-            //Store the sent frame in the sent queue
-            ll_append_node(&sender->send_q_head, sent_buf);
-            sender->seqnum = (sender->seqnum == 255) ? 0 : sender->seqnum + 1;
-        }
+        //Store the sent frame in the sent queue
+        ll_append_node(&sender->send_q_head, sent_buf);
+        sender->seqnum = (sender->seqnum == 255) ? 0 : sender->seqnum + 1;
     }
 }
 
 void handle_timedout_frames(Sender * sender,
-                            LLnode ** outgoing_frames_head_ptr)
+        LLnode ** outgoing_frames_head_ptr)
 {
     int i;
     LLnode * curr_node = sender->send_q_head;
@@ -271,7 +258,7 @@ void * run_sender(void * input_sender)
     LLnode * outgoing_frames_head;
     struct timeval * expiring_timeval;
     long sleep_usec_time, sleep_sec_time;
-    
+
     //This incomplete sender thread, at a high level, loops as follows:
     //1. Determine the next time the thread should wake up
     //2. Grab the mutex protecting the input_cmd/inframe queues
@@ -285,7 +272,7 @@ void * run_sender(void * input_sender)
 
         //Get the current time
         gettimeofday(&curr_timeval, 
-                     NULL);
+                NULL);
 
         //time_spec is a data structure used to specify when the thread should wake up
         //The time is specified as an ABSOLUTE (meaning, conceptually, you specify 9/23/2010 @ 1pm, wakeup)
@@ -305,7 +292,7 @@ void * run_sender(void * input_sender)
         {
             //Take the difference between the next event and the current time
             sleep_usec_time = timeval_usecdiff(&curr_timeval,
-                                               expiring_timeval);
+                    expiring_timeval);
 
             //Sleep if the difference is positive
             if (sleep_usec_time > 0)
@@ -324,7 +311,7 @@ void * run_sender(void * input_sender)
             time_spec.tv_nsec -= 1000000000;
         }
 
-        
+
         //*****************************************************************************************
         //NOTE: Anything that involves dequeing from the input frames or input commands should go 
         //      between the mutex lock and unlock, because other threads CAN/WILL access these structures
@@ -334,36 +321,36 @@ void * run_sender(void * input_sender)
         //Check whether anything has arrived
         int input_cmd_length = ll_get_length(sender->input_cmdlist_head);
         int inframe_queue_length = ll_get_length(sender->input_framelist_head);
-        
+
         //Nothing (cmd nor incoming frame) has arrived, so do a timed wait on the sender's condition variable (releases lock)
         //A signal on the condition variable will wakeup the thread and reaquire the lock
         if (input_cmd_length == 0 &&
-            inframe_queue_length == 0)
+                inframe_queue_length == 0)
         {
-            
+
             pthread_cond_timedwait(&sender->buffer_cv, 
-                                   &sender->buffer_mutex,
-                                   &time_spec);
+                    &sender->buffer_mutex,
+                    &time_spec);
         }
         //Implement this
         handle_incoming_acks(sender,
-                             &outgoing_frames_head);
+                &outgoing_frames_head);
 
         //Implement this
         handle_input_cmds(sender,
-                          &outgoing_frames_head);
+                &outgoing_frames_head);
 
         pthread_mutex_unlock(&sender->buffer_mutex);
 
 
         //Implement this
         handle_timedout_frames(sender,
-                               &outgoing_frames_head);
+                &outgoing_frames_head);
 
         //CHANGE THIS AT YOUR OWN RISK!
         //Send out all the frames
         int ll_outgoing_frame_length = ll_get_length(outgoing_frames_head);
-        
+
         while(ll_outgoing_frame_length > 0)
         {
             LLnode * ll_outframe_node = ll_pop_node(&outgoing_frames_head);
