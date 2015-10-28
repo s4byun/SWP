@@ -20,6 +20,6 @@
 void init_sender(Sender *, int);
 void * run_sender(void *);
 void ll_split_head(LLnode **, int);
-int is_next_ack(Sender *, int);
-int send_q_size(Sender *);
+int is_next_ack(Sender *, int, int);
+int send_q_size(Sender *, int);
 #endif

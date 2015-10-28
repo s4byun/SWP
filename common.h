@@ -69,8 +69,9 @@ struct Receiver_t
     pthread_cond_t buffer_cv;
     LLnode * input_framelist_head;
 
-    struct Frame_t * recv_q[WS];
-    int recv_id, NFE;
+    struct Frame_t *** recv_q;
+    int recv_id;
+    int * NFE;
 };
 
 struct Sender_t
@@ -86,8 +87,11 @@ struct Sender_t
     LLnode * input_cmdlist_head;
     LLnode * input_framelist_head;
 
-    LLnode * send_q_head;
-    int send_id, seqnum, LFS, LAR;
+    LLnode ** send_q_head;
+    int send_id;
+    int * seqnum;
+    int * LFS;
+    int * LAR;
 };
 
 struct sendQ_slot

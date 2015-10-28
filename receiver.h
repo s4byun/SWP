@@ -17,10 +17,10 @@
 #include "communicate.h"
 
 void init_receiver(Receiver *, int);
-void insert_frame(Receiver *, Frame *);
-Frame* find_frame_in_buffer(Receiver *, int);
-int is_valid(Receiver *, int);
-int recv_q_size(Receiver *);
-int is_frame_in_buffer(Receiver *, int);
+void insert_frame(Receiver *, Frame *, int);
+Frame* find_frame_in_buffer(Receiver *, int, int);
+int is_valid(Receiver *, int, int);
+int recv_q_size(Receiver *, int);
+int is_frame_in_buffer(Receiver *, int, int);
 void * run_receiver(void *);
 #endif

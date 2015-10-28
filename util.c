@@ -54,6 +54,40 @@ void ll_append_node(LLnode ** head_ptr,
     }
 }
 
+void ll_append_node_at_front(LLnode ** head_ptr, void * value)
+{
+    LLnode * prev_last_node;
+    LLnode * new_node;
+    LLnode * head;
+
+    if (head_ptr == NULL)
+    {
+        return;
+    }
+    
+    //Init the value pntr
+    head = (*head_ptr);
+    new_node = (LLnode *) malloc(sizeof(LLnode));
+    new_node->value = value;
+
+    //The list is empty, no node is currently present
+    if (head == NULL)
+    {
+        (*head_ptr) = new_node;
+        new_node->prev = new_node;
+        new_node->next = new_node;
+    }
+    else
+    {
+        //Node exists by itself
+        prev_last_node = head->prev;
+        head->prev = new_node;
+        prev_last_node->next = new_node;
+        new_node->next = head;
+        new_node->prev = prev_last_node;
+        *head_ptr = new_node;
+    }    
+}
 
 LLnode * ll_pop_node(LLnode ** head_ptr)
 {

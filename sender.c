@@ -4,41 +4,53 @@ void init_sender(Sender * sender, int id)
 {
     sender->send_id = id;
     sender->input_cmdlist_head = NULL;
-    sender->input_framelist_head = NULL;
-    sender->send_q_head = NULL; 
+    sender->input_framelist_head = NULL; 
     pthread_cond_init(&sender->buffer_cv, NULL);
     pthread_mutex_init(&sender->buffer_mutex, NULL);
-    sender->seqnum = 0;
-    sender->LFS = -1;
-    sender->LAR = -1;
+    sender->send_q_head = malloc(sizeof(LLnode*)*glb_receivers_array_length);
+    sender->seqnum = malloc(sizeof(int)*glb_receivers_array_length);
+    sender->LFS = malloc(sizeof(int)*glb_receivers_array_length);
+    sender->LAR = malloc(sizeof(int)*glb_receivers_array_length);
+
+    int i;
+    for(i=0; i<glb_receivers_array_length; i++)
+    {
+        sender->send_q_head[i] = NULL; 
+        sender->seqnum[i] = 0;
+        sender->LFS[i] = -1;
+        sender->LAR[i] = -1;
+    }
 }
 
 struct timeval * sender_get_next_expiring_timeval(Sender * sender)
 {
     struct timeval* tv = NULL;
-    LLnode * curr_node = sender->send_q_head;
-    int i;
+    int i,j;
 
-    //Iterate through the send queue
-    for(i=0; i < send_q_size(sender); i++)
+    //Iterate through the send queue for each receiver state
+    for(i=0; i < glb_receivers_array_length; i++)
     {
-        send_Q * curr = (send_Q *) curr_node->value;
-        curr_node = curr_node->next;
-        
-        if(curr->frame_timeout == NULL)
-            continue;
+        LLnode * curr_node = sender->send_q_head[i];
+        for(j=0; j < ll_get_length(curr_node); j++)
+        {
+            send_Q * curr = (send_Q *) curr_node->value;
+            curr_node = curr_node->next;
 
-        //Found the next expiring timeval
-        if(tv == NULL || timeval_usecdiff(tv, curr->frame_timeout) < 0)
-            tv = curr->frame_timeout;
+            if(curr->frame_timeout == NULL)
+                continue;
+
+            //Found the next expiring timeval
+            if(tv == NULL || timeval_usecdiff(tv, curr->frame_timeout) < 0)
+                tv = curr->frame_timeout;
+        }
     }
-    
+
     return tv;
 }
 
 
 void handle_incoming_acks(Sender * sender,
-                          LLnode ** outgoing_frames_head_ptr)
+        LLnode ** outgoing_frames_head_ptr)
 {
     int incoming_msgs_length = ll_get_length(sender->input_framelist_head);
     while(incoming_msgs_length > 0)
@@ -60,28 +72,32 @@ void handle_incoming_acks(Sender * sender,
             //Checks if this ACK is for this sender
             if(atoi(inframe->sender_addr) == sender->send_id)
             {
+                int id = atoi(inframe->receiver_addr);
+
                 //Checks if the received ACK is cumulative
-                if(is_next_ack(sender, (int) inframe->seqnum))
+                if(is_next_ack(sender, (int) inframe->seqnum, id))
                 {
                     //Update the LAR
-                    sender->LAR = (int) inframe->seqnum;
+                    sender->LAR[id] = (int) inframe->seqnum;
 
                     //Pop the corresponding frame off the send queue
-                    LLnode * acked_node = ll_pop_node(&sender->send_q_head);
+                    LLnode * acked_node = ll_pop_node(&sender->send_q_head[id]);
                     //send_Q * acked = (send_Q*)acked_node->value;
                     //fprintf(stderr, "ACKED DATA %s\n", acked->frame->data);
-                    ll_destroy_sendQ(acked_node);
+                    
+                    if(acked_node != NULL)
+                        ll_destroy_sendQ(acked_node);
                 }
             }
         }
-        
+
         free(inframe);
     }
 }
 
 
 void handle_input_cmds(Sender * sender,
-                       LLnode ** outgoing_frames_head_ptr)
+        LLnode ** outgoing_frames_head_ptr)
 {
     int input_cmd_length = ll_get_length(sender->input_cmdlist_head);
 
@@ -90,7 +106,8 @@ void handle_input_cmds(Sender * sender,
 
     //Recheck the command queue length to see if stdin_thread dumped a command on us
     input_cmd_length = ll_get_length(sender->input_cmdlist_head);
-    while (input_cmd_length > 0 && send_q_size(sender) < WS)
+
+    while (input_cmd_length > 0) 
     {
         //Pop a node off and update the input_cmd_length
         LLnode * ll_input_cmd_node = ll_pop_node(&sender->input_cmdlist_head);
@@ -100,88 +117,103 @@ void handle_input_cmds(Sender * sender,
         Cmd * outgoing_cmd = (Cmd *) ll_input_cmd_node->value;
         free(ll_input_cmd_node);
 
-        //This is probably ONLY one step you want
-        Frame * outgoing_frame = (Frame *) malloc (sizeof(Frame));
-
         //Convert uint16_t to string
         char* src = malloc(MAC_ADDR_SIZE);
         char* dst = malloc(MAC_ADDR_SIZE);
         sprintf(src, "%u", outgoing_cmd->src_id);
         sprintf(dst, "%u", outgoing_cmd->dst_id);
 
-        //Populate the outgoing frame's fields
-        strncpy(outgoing_frame->receiver_addr, dst, MAC_ADDR_SIZE);
-        strncpy(outgoing_frame->sender_addr, src, MAC_ADDR_SIZE);
-        strncpy(outgoing_frame->data, outgoing_cmd->message, FRAME_PAYLOAD_SIZE);
+        int id = atoi(dst);
 
-        //Assign seqnum to the outgoing frame
-        outgoing_frame->seqnum = sender->seqnum;
+        if(send_q_size(sender, id) < WS)
+        {
+            Frame * outgoing_frame = (Frame *) malloc (sizeof(Frame));
 
-        char* raw_char_buf = convert_frame_to_char(outgoing_frame); 
+            //Populate the outgoing frame's fields
+            strncpy(outgoing_frame->receiver_addr, dst, MAC_ADDR_SIZE);
+            strncpy(outgoing_frame->sender_addr, src, MAC_ADDR_SIZE);
+            strncpy(outgoing_frame->data, outgoing_cmd->message, FRAME_PAYLOAD_SIZE);
 
-        //Assign crc to the outgoing frame
-        outgoing_frame->crc = crc8(raw_char_buf, MAX_FRAME_SIZE);
+            //Assign seqnum to the outgoing frame
+            outgoing_frame->seqnum = sender->seqnum[id];
 
-        free(raw_char_buf);
+            char* raw_char_buf = convert_frame_to_char(outgoing_frame); 
 
-        //At this point, we don't need the outgoing_cmd
-        free(outgoing_cmd->message);
-        free(outgoing_cmd);
+            //Assign crc to the outgoing frame
+            outgoing_frame->crc = crc8(raw_char_buf, MAX_FRAME_SIZE);
 
-        //Update LFS
-        sender->LFS = sender->seqnum;
+            free(raw_char_buf);
 
-        //Convert the message to the outgoing_charbuf and send it
-        char * outgoing_charbuf = convert_frame_to_char(outgoing_frame);
-        //fprintf(stderr, "MESSAGE %s SENT\n", outgoing_frame->data);
-        ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
 
-        //This frame needs to be stored in the send queue.
-        send_Q * sent_buf = malloc(sizeof(send_Q));
-        sent_buf->frame = malloc(sizeof(Frame));
-        sent_buf->frame = outgoing_frame;
+            //At this point, we don't need the outgoing_cmd
+            free(outgoing_cmd->message);
+            free(outgoing_cmd);
 
-        //Leave timeout field as NULL for handle_timedout_frames to handle it
-        sent_buf->frame_timeout = NULL;
+            //Update LFS
+            sender->LFS[id] = sender->seqnum[id];
 
-        //Store the sent frame in the sent queue
-        ll_append_node(&sender->send_q_head, sent_buf);
-        sender->seqnum = (sender->seqnum == 255) ? 0 : sender->seqnum + 1;
+            //Convert the message to the outgoing_charbuf and send it
+            char * outgoing_charbuf = convert_frame_to_char(outgoing_frame);
+            //fprintf(stderr, "MESSAGE %s SENT\n", outgoing_frame->data);
+            ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
+
+            //This frame needs to be stored in the send queue.
+            send_Q * sent_buf = malloc(sizeof(send_Q));
+            sent_buf->frame = malloc(sizeof(Frame));
+            sent_buf->frame = outgoing_frame;
+
+            //Leave timeout field as NULL for handle_timedout_frames to handle it
+            sent_buf->frame_timeout = NULL;
+
+            //Store the sent frame in the sent queue
+            ll_append_node(&sender->send_q_head[id], sent_buf);
+            sender->seqnum[id] = (sender->seqnum[id] == 255) ? 0 : sender->seqnum[id] + 1;
+        }
+        else
+        {
+            ll_append_node_at_front(&sender->input_cmdlist_head, outgoing_cmd);
+            input_cmd_length = ll_get_length(sender->input_cmdlist_head);
+            break;
+        }
     }
 }
 
 void handle_timedout_frames(Sender * sender,
         LLnode ** outgoing_frames_head_ptr)
 {
-    int i;
-    LLnode * curr_node = sender->send_q_head;
-
     //Iterate through the send queue
-    for(i=0; i < send_q_size(sender); i++)
+    int i, j;
+    for(i=0; i < glb_receivers_array_length; i++)
     {
-        send_Q * curr = (send_Q *) curr_node->value;
-        Frame * sent_frame = curr->frame;
-        struct timeval * tv = curr->frame_timeout;
-        struct timeval now;
-        gettimeofday(&now, NULL);
-
-        curr_node = curr_node->next;
-        //A frame with set timeout is found
-        if(tv != NULL)
+        LLnode * curr_node = sender->send_q_head[i];
+        for(j=0; j < ll_get_length(curr_node); j++)
         {
-            //Update timeout field for old, timed out frames
-            if(timeval_usecdiff(tv, &now) > 0)
+            send_Q * curr = (send_Q *) curr_node->value;
+            Frame * sent_frame = curr->frame;
+            struct timeval * tv = curr->frame_timeout;
+            struct timeval now;
+            gettimeofday(&now, NULL);
+
+            curr_node = curr_node->next;
+
+            //A frame with set timeout is found
+            if(tv != NULL)
             {
-                char * outframe_char_buf = convert_frame_to_char(sent_frame);
-                ll_append_node(outgoing_frames_head_ptr, outframe_char_buf);
+                //Update timeout field for old, timed out frames
+                if(timeval_usecdiff(tv, &now) > 0)
+                {
+                    char * outframe_char_buf = convert_frame_to_char(sent_frame);
+                    ll_append_node(outgoing_frames_head_ptr, outframe_char_buf);
+                    calculate_timeout(curr->frame_timeout);
+                }
+            }
+
+            //Update timeout field for fresh outgoing frames
+            if(tv == NULL)
+            {
+                curr->frame_timeout = (struct timeval *) malloc(sizeof(struct timeval));
                 calculate_timeout(curr->frame_timeout);
             }
-        }
-        //Update timeout field for fresh outgoing frames
-        if(tv == NULL)
-        {
-            curr->frame_timeout = (struct timeval *) malloc(sizeof(struct timeval));
-            calculate_timeout(curr->frame_timeout);
         }
     }
 }
@@ -219,29 +251,29 @@ void ll_split_head(LLnode  ** head_ptr, int payload_size)
 }
 
 //Gets the size of sender queue
-int send_q_size(Sender * sender)
+int send_q_size(Sender * sender, int id)
 {
     //Nothing in queue
-    if(sender->LFS == sender->LAR)
+    if(sender->LFS[id] == sender->LAR[id])
         return 0;
 
     //Normal case
-    else if(sender->LFS > sender->LAR)
+    else if(sender->LFS[id] > sender->LAR[id])
     {
-        return sender->LFS - sender->LAR; 
+        return sender->LFS[id] - sender->LAR[id]; 
     }
 
     //Wrap around case
     else
     {
-        return sender->LFS + MAX_SEQ_NUM - sender->LAR; 
+        return sender->LFS[id] + MAX_SEQ_NUM - sender->LAR[id]; 
     }
 }
 
 //Checks if received ACK is cumulative
-int is_next_ack(Sender* sender, int ack)
+int is_next_ack(Sender* sender, int ack, int id)
 {
-    int next_ack = (sender->LAR == 255) ? 0 : sender->LAR + 1;
+    int next_ack = (sender->LAR[id] == 255) ? 0 : sender->LAR[id] + 1;
     if(ack == next_ack)
         return 1;
     else
