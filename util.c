@@ -133,17 +133,14 @@ void ll_destroy_node(LLnode * node)
     node = NULL;
 }
 
-void ll_destroy_sendQ(LLnode * node)
+void destroy_sendQ(send_Q* curr)
 {
-    send_Q * curr = (send_Q *) node->value;
     free(curr->frame);
     free(curr->frame_timeout);
     curr->frame = NULL;
     curr->frame_timeout = NULL;
     free(curr);
     curr = NULL;
-    free(node);
-    node = NULL;
 }
 
 //Compute the difference in usec for two timeval objects

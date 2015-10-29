@@ -87,7 +87,7 @@ struct Sender_t
     LLnode * input_cmdlist_head;
     LLnode * input_framelist_head;
 
-    LLnode ** send_q_head;
+    struct sendQ_slot *** send_q_head;
     int send_id;
     int * seqnum;
     int * LFS;

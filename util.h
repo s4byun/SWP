@@ -20,7 +20,7 @@ int ll_get_length(LLnode *);
 void ll_append_node(LLnode **, void *);
 LLnode * ll_pop_node(LLnode **);
 void ll_destroy_node(LLnode *);
-void ll_destroy_sendQ(LLnode *);
+void destroy_sendQ(send_Q *);
 void ll_append_node_at_front(LLnode **, void *);
 
 //Print functions

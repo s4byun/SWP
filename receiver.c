@@ -65,10 +65,14 @@ void handle_incoming_msgs(Receiver * receiver,
                         {
                             receiver->NFE[id] = (receiver->NFE[id] == 255) ? 0 : receiver->NFE[id] + 1;
                             printf("<RECV_%d>:[%s]\n", receiver->recv_id, inframe->data);
+                            fprintf(stderr, "<RECV_%d>:[%s]\n", receiver->recv_id, inframe->data);
                             Frame * next_frame;
                             while((next_frame = find_frame_in_buffer(receiver, receiver->NFE[id], id)) != NULL)
                             {
+                                char * ack = convert_frame_to_char(next_frame);
+                                ll_append_node(outgoing_frames_head_ptr, ack);
                                 printf("<RECV_%d>:[%s]\n", receiver->recv_id, next_frame->data);
+                                fprintf(stderr, "<RECV_%d>:[%s]\n", receiver->recv_id, next_frame->data);
                                 free(next_frame);
                                 receiver->NFE[id] = (receiver->NFE[id] == 255) ? 0 : receiver->NFE[id] + 1;
                             }
@@ -76,14 +80,17 @@ void handle_incoming_msgs(Receiver * receiver,
                         //Checks if out of order message is already in buffer
                         else if(is_frame_in_buffer(receiver, frame_num, id) == 0)
                         {
-                            //fprintf(stderr, "MESSAGE %s STORED\n", inframe->data);
+                            fprintf(stderr, "MESSAGE %s STORED\n", inframe->data);
                             insert_frame(receiver, inframe, id);
                         }
-                    }
 
-                    // Send ACK
-                    char * ack = convert_frame_to_char(inframe);
-                    ll_append_node(outgoing_frames_head_ptr, ack);
+                    }
+                    else if(is_already_seen(receiver, frame_num, id))
+                    {
+                        // Send ACK
+                        char * ack = convert_frame_to_char(inframe);
+                        ll_append_node(outgoing_frames_head_ptr, ack);
+                    }
                 } 
             }
             else
@@ -102,17 +109,39 @@ void handle_incoming_msgs(Receiver * receiver,
 
 int is_valid(Receiver * receiver, int frame_num, int id)
 {
-    if(receiver->NFE[id] + WS - 1 > MAX_SEQ_NUM)
+    int NFE = receiver->NFE[id];
+    int limit = (NFE + WS - 1) % (MAX_SEQ_NUM + 1);
+
+    if(limit >= NFE && frame_num >= NFE && frame_num <= limit)
     {
-        if(frame_num >= receiver->NFE[id] || frame_num <= receiver->NFE[id] + MAX_SEQ_NUM - 2)
-        {
-            return 1;
-        }
-    }
-    else if(frame_num >= receiver->NFE[id] && frame_num <= receiver->NFE[id] + WS - 1)
         return 1;
+    }
+    if(limit < NFE && (frame_num >= NFE || frame_num <= limit))
+    {
+        return 1;
+    }
 
     return 0;
+}
+
+int is_already_seen(Receiver * receiver, int frame_num, int id)
+{
+    int NFE = receiver->NFE[id];
+    int limit = (NFE + WS - 1) % (MAX_SEQ_NUM + 1);
+
+    if(limit >= NFE)
+    {
+        if(frame_num < NFE)
+            return 1;
+    }
+    if(limit < NFE) 
+    {
+        if(frame_num < NFE && frame_num > limit)
+            return 1;
+    }
+
+    return 0;
+   
 }
 
 void insert_frame(Receiver * receiver, Frame * frame, int id)
